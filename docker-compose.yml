@@ -1,0 +1,17 @@
+services:
+  mimo-audio-adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: registry.mouse-service.com:1443/mimo-audio-adapter:latest
+    ports:
+      - "8000:8000"
+    environment:
+      MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
+      DEFAULT_TTS_VOICE: ${DEFAULT_TTS_VOICE:-冰糖}
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
