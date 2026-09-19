@@ -163,7 +163,10 @@ async def speech(request: Request, authorization: Annotated[str | None, Header()
     if not isinstance(text, str) or not text.strip():
         raise invalid_request("'input' is required and must be a non-empty string", code="missing_input", param="input")
 
-    mimo_format, content_type = resolve_speech_format(body.get("response_format") or settings.tts_format)
+    requested_format = body.get("response_format") or settings.tts_format
+    mimo_format, content_type = resolve_speech_format(requested_format, settings.allow_format_downgrade)
+    if str(requested_format).lower() not in ("wav", "pcm") and mimo_format == "wav":
+        log.info("response_format=%r downgraded to wav; MiMo cannot emit it", requested_format)
     voice = body.get("voice") or settings.tts_voice
     voice = settings.voice_aliases.get(voice, voice)
     stream = bool(body.get("stream", False))

@@ -24,18 +24,27 @@ SUPPORTED_SPEECH_FORMATS: dict[str, tuple[str, str]] = {
 UNSUPPORTED_SPEECH_FORMATS = {"mp3", "opus", "aac", "flac"}
 
 
-def resolve_speech_format(response_format: str) -> tuple[str, str]:
+def resolve_speech_format(response_format: str, allow_downgrade: bool = False) -> tuple[str, str]:
     """Map an OpenAI response_format to MiMo's, or reject it explicitly.
 
-    Unsupported formats return 400 rather than silently substituting WAV: the
-    HA OpenAI-compatible component pairs the *requested* format name with the
-    bytes it received and never reads Content-Type, so a silent substitution
-    would be mislabeled downstream and could skip a needed transcode.
+    MiMo emits only wav/pcm16 and this adapter does not transcode, so the
+    formats it cannot produce are normally refused rather than silently
+    substituted: a caller that pairs the bytes with the format name it
+    requested would mislabel them downstream.
+
+    allow_downgrade exists because Home Assistant's built-in OpenAI TTS asks
+    for mp3 with no way to configure otherwise — the Assist pipeline never
+    passes preferred_format through — so refusing would leave it unusable.
+    When enabled, an unsupported format yields wav, and the response is still
+    typed audio/wav so the wire description stays truthful; HA transcodes with
+    its own ffmpeg when it needs a different container.
     """
     fmt = (response_format or "wav").lower()
     if fmt in SUPPORTED_SPEECH_FORMATS:
         return SUPPORTED_SPEECH_FORMATS[fmt]
     if fmt in UNSUPPORTED_SPEECH_FORMATS:
+        if allow_downgrade:
+            return SUPPORTED_SPEECH_FORMATS["wav"]
         raise invalid_request(
             f"response_format={fmt!r} is not supported: MiMo emits only wav/pcm and this adapter does not transcode. "
             f"Request 'wav' and let the caller convert. Supported: {sorted(SUPPORTED_SPEECH_FORMATS)}.",

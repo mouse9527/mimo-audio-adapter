@@ -49,13 +49,20 @@ Voices: `mimo_default`, 冰糖, 茉莉, 苏打, 白桦 (zh), Mia, Chloe, Milo, D
 **Supported:** `wav`, `pcm` (24kHz PCM16LE mono, headerless,
 `application/octet-stream`).
 
-**Rejected with 400:** `mp3`, `opus`, `aac`, `flac`.
-MiMo emits only wav/pcm16 and this adapter does not transcode. The rejection is
-deliberate rather than a silent downgrade: the HA OpenAI-compatible component
-pairs the bytes with **the format name it requested** and never reads
-`Content-Type`, so returning WAV labeled "mp3" would mislabel it downstream and
-could skip a conversion HA would otherwise perform. Ask for `wav` and let HA's
-own ffmpeg layer (`preferred_format`) handle mp3.
+**Downgraded to wav:** `mp3`, `opus`, `aac`, `flac` (default, `ALLOW_FORMAT_DOWNGRADE=true`).
+MiMo emits only wav/pcm16 and this adapter does not transcode.
+
+The original design refused these outright, on the grounds that a caller
+pairing the bytes with the format name it *requested* would mislabel them. That
+turned out to make the adapter unusable with Home Assistant: HA's built-in
+OpenAI TTS requests `mp3`, and while `preferred_format` exists as a per-call
+option, the Assist pipeline never forwards it — so every spoken response failed
+with a 400. Availability wins here, and the response is still typed
+`audio/wav`, so the wire description stays truthful; HA transcodes with its own
+ffmpeg when it needs another container.
+
+Set `ALLOW_FORMAT_DOWNGRADE=false` to restore the strict contract, which suits
+callers that do read `Content-Type`. An unrecognised format is always rejected.
 
 ## Streaming
 

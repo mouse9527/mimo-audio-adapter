@@ -77,16 +77,36 @@ def test_pcm_format_returns_headerless_octet_stream(client, auth):
     assert json.loads(route.calls[0].request.content)["audio"]["format"] == "pcm16"
 
 
-def test_mp3_rejected_rather_than_silently_downgraded(client, auth):
-    """HA's OpenAI-compatible component labels bytes with the format it asked
-    for and never reads Content-Type, so a silent WAV substitution would be
-    mislabeled downstream."""
+@respx.mock
+def test_mp3_downgrades_to_wav_for_home_assistant(client, auth):
+    """HA's built-in OpenAI TTS requests mp3 with no way to configure it, and
+    the Assist pipeline never forwards preferred_format, so refusing would
+    leave it unusable. The response is still typed audio/wav, so the wire
+    description stays truthful."""
+    wav = wav_bytes()
+    route = respx.post(MIMO_URL).mock(return_value=_audio_ok(wav))
+    r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "mp3"}, headers=auth)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/wav"
+    assert r.content == wav
+    assert json.loads(route.calls[0].request.content)["audio"]["format"] == "wav"
+
+
+def test_mp3_rejected_when_downgrade_disabled(client, auth, monkeypatch):
+    """The strict contract remains available for callers that read Content-Type."""
+    from app import main
+    monkeypatch.setattr(main.settings, "allow_format_downgrade", False)
     r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "mp3"}, headers=auth)
     assert r.status_code == 400
     err = r.json()["error"]
     assert err["code"] == "unsupported_response_format"
-    assert err["param"] == "response_format"
     assert "does not transcode" in err["message"]
+
+
+def test_unknown_format_still_rejected(client, auth):
+    """Downgrade covers formats MiMo cannot emit, not typos."""
+    r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "flac2"}, headers=auth)
+    assert r.status_code == 400
 
 
 def test_missing_input_rejected(client, auth):
