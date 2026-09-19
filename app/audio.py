@@ -16,41 +16,33 @@ MIMO_FORMATS = {"wav", "pcm16"}
 # OpenAI response_format -> (mimo format, content type)
 # mp3/opus/aac/flac are deliberately absent: MiMo cannot produce them and this
 # adapter does not transcode. See README "Known limitations".
-SUPPORTED_SPEECH_FORMATS: dict[str, tuple[str, str]] = {
-    "wav": ("wav", "audio/wav"),
-    "pcm": ("pcm16", "application/octet-stream"),
+# OpenAI response_format -> (MiMo audio.format, content type, transcode target)
+# MiMo emits only wav/pcm16; anything else is transcoded from wav on the way out.
+SUPPORTED_SPEECH_FORMATS: dict[str, tuple[str, str, str | None]] = {
+    "wav": ("wav", "audio/wav", None),
+    "pcm": ("pcm16", "application/octet-stream", None),
+    "mp3": ("wav", "audio/mpeg", "mp3"),
+    "opus": ("wav", "audio/ogg", "opus"),
+    "aac": ("wav", "audio/aac", "aac"),
+    "flac": ("wav", "audio/flac", "flac"),
 }
 
-UNSUPPORTED_SPEECH_FORMATS = {"mp3", "opus", "aac", "flac"}
 
+def resolve_speech_format(response_format: str) -> tuple[str, str, str | None]:
+    """Map an OpenAI response_format to what MiMo is asked for and what we return.
 
-def resolve_speech_format(response_format: str, allow_downgrade: bool = False) -> tuple[str, str]:
-    """Map an OpenAI response_format to MiMo's, or reject it explicitly.
+    Returns (mimo_format, content_type, transcode_to). A transcode target means
+    MiMo produces wav and the adapter converts before responding.
 
-    MiMo emits only wav/pcm16 and this adapter does not transcode, so the
-    formats it cannot produce are normally refused rather than silently
-    substituted: a caller that pairs the bytes with the format name it
-    requested would mislabel them downstream.
-
-    allow_downgrade exists because Home Assistant's built-in OpenAI TTS asks
-    for mp3 with no way to configure otherwise — the Assist pipeline never
-    passes preferred_format through — so refusing would leave it unusable.
-    When enabled, an unsupported format yields wav, and the response is still
-    typed audio/wav so the wire description stays truthful; HA transcodes with
-    its own ffmpeg when it needs a different container.
+    Transcoding exists for one reason: Home Assistant requests mp3, offers no
+    way to configure that, and labels the bytes with the format it asked for
+    rather than reading Content-Type. Returning wav under an mp3 label made HA
+    skip its own ffmpeg pass and hand undecodable audio to the player. Since
+    only the caller's requested format can be honoured here, honour it.
     """
     fmt = (response_format or "wav").lower()
     if fmt in SUPPORTED_SPEECH_FORMATS:
         return SUPPORTED_SPEECH_FORMATS[fmt]
-    if fmt in UNSUPPORTED_SPEECH_FORMATS:
-        if allow_downgrade:
-            return SUPPORTED_SPEECH_FORMATS["wav"]
-        raise invalid_request(
-            f"response_format={fmt!r} is not supported: MiMo emits only wav/pcm and this adapter does not transcode. "
-            f"Request 'wav' and let the caller convert. Supported: {sorted(SUPPORTED_SPEECH_FORMATS)}.",
-            code="unsupported_response_format",
-            param="response_format",
-        )
     raise invalid_request(
         f"Unknown response_format={fmt!r}. Supported: {sorted(SUPPORTED_SPEECH_FORMATS)}.",
         code="unsupported_response_format",

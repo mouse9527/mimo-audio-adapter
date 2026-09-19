@@ -4,6 +4,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
+# ffmpeg is needed only for mp3/opus/aac/flac output, which exists because
+# Home Assistant requests mp3 and cannot be configured otherwise.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt .

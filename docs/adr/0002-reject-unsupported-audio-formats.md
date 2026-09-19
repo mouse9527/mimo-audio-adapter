@@ -4,7 +4,7 @@ Date: 2026-09-19
 
 ## Status
 
-Accepted
+Superseded by the transcoding decision recorded below (2026-09-19)
 
 ## Context
 
@@ -47,3 +47,24 @@ default is `mp3`. This is documented in the README.
 
 The adapter needs no audio libraries. WAV framing uses `struct` from the
 standard library.
+
+
+## Update: superseded
+
+Refusing mp3 broke Home Assistant outright — its Assist pipeline never forwards
+`preferred_format`, so every spoken response failed with 400. The refusal was
+then relaxed to return wav instead, which fixed the 400 and broke playback on
+iOS instead.
+
+The reason is the mislabeling this ADR predicted, arriving by a different
+route. `tts/__init__.py` builds the stream token, file extension and
+`Content-Type` from `options[preferred_format]` — the *requested* name — and
+decides whether to transcode with `final_extension != extension`. With wav
+bytes labeled mp3, that comparison is `"mp3" != "mp3"`, so HA skipped its own
+ffmpeg pass and served RIFF data as `audio/mpeg`.
+
+`preferred_format` cannot be set for this path: only `assist_satellite` passes
+`tts_audio_output`, and `websocket_api` — which the iOS app uses — never does.
+
+So the caller's requested format has to be honoured for real. See
+[ADR 0004](0004-transcode-formats-mimo-cannot-emit.md).

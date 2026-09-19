@@ -46,28 +46,36 @@ Voices: `mimo_default`, 冰糖, 茉莉, 苏打, 白桦 (zh), Mia, Chloe, Milo, D
 
 ## Compatibility range
 
-**Supported:** `wav`, `pcm` (24kHz PCM16LE mono, headerless,
-`application/octet-stream`).
+| `response_format` | MiMo asked for | Returned as | ffmpeg |
+|---|---|---|---|
+| `wav` (default) | wav | `audio/wav` | no |
+| `pcm` | pcm16 | `application/octet-stream` | no |
+| `mp3` | wav | `audio/mpeg` | yes |
+| `opus` | wav | `audio/ogg` | yes |
+| `aac` | wav | `audio/aac` | yes |
+| `flac` | wav | `audio/flac` | yes |
 
-**Downgraded to wav:** `mp3`, `opus`, `aac`, `flac` (default, `ALLOW_FORMAT_DOWNGRADE=true`).
-MiMo emits only wav/pcm16 and this adapter does not transcode.
+MiMo emits only wav and pcm16, so the other four are converted on the way out.
+This is the one place the adapter does more than translate a protocol, and it
+earns its place: Home Assistant requests `mp3`, offers no way to configure
+that, and — decisively — labels the bytes with the format it *requested* rather
+than reading `Content-Type`. Returning wav under an mp3 label therefore made HA
+skip its own ffmpeg pass and hand undecodable audio to the player. Honouring
+the request is the only option that works end to end.
 
-The original design refused these outright, on the grounds that a caller
-pairing the bytes with the format name it *requested* would mislabel them. That
-turned out to make the adapter unusable with Home Assistant: HA's built-in
-OpenAI TTS requests `mp3`, and while `preferred_format` exists as a per-call
-option, the Assist pipeline never forwards it — so every spoken response failed
-with a 400. Availability wins here, and the response is still typed
-`audio/wav`, so the wire description stays truthful; HA transcodes with its own
-ffmpeg when it needs another container.
+mp3 is encoded at a constant bitrate; some hardware decoders reject variable
+bitrate and play nothing at all, which looks identical to a broken response.
 
-Set `ALLOW_FORMAT_DOWNGRADE=false` to restore the strict contract, which suits
-callers that do read `Content-Type`. An unrecognised format is always rejected.
+The `wav` and `pcm` paths never invoke ffmpeg. An unrecognised format is
+rejected with 400.
 
 ## Streaming
 
 `stream: true` with `response_format: pcm` streams decoded PCM as it arrives —
 the lowest-latency path.
+
+A transcoded format cannot stream, because the container needs the whole
+signal before it can be framed; those requests are served non-streaming.
 
 `stream: true` with `wav` **buffers**, then frames the audio with a correct RIFF
 header. A WAV header needs an accurate length, which is unknowable mid-stream;
@@ -218,3 +226,4 @@ docs, but real streaming chunk framing and error payloads remain unconfirmed.
 - [ADR 0001](docs/adr/0001-credentials-belong-to-the-caller.md) — the adapter holds no credential
 - [ADR 0002](docs/adr/0002-reject-unsupported-audio-formats.md) — reject mp3 rather than downgrade
 - [ADR 0003](docs/adr/0003-streaming-tts-boundaries.md) — stream PCM, buffer WAV
+- [ADR 0004](docs/adr/0004-transcode-formats-mimo-cannot-emit.md) — transcode what MiMo cannot emit (supersedes 0002)

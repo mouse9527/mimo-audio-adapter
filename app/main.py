@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, Form, Header, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import mimo
+from . import mimo, transcode
 from .audio import (
     PCM_CHANNELS,
     PCM_SAMPLE_RATE,
@@ -63,7 +63,11 @@ async def ready() -> dict[str, Any]:
     Probing MiMo here would tie pod readiness to a third party and let an
     upstream blip take every replica out of the Service.
     """
-    return {"status": "ready", "upstream": settings.mimo_base_url}
+    return {
+        "status": "ready",
+        "upstream": settings.mimo_base_url,
+        "transcoding": transcode.ffmpeg_available(),
+    }
 
 
 @app.get("/v1/models")
@@ -164,9 +168,7 @@ async def speech(request: Request, authorization: Annotated[str | None, Header()
         raise invalid_request("'input' is required and must be a non-empty string", code="missing_input", param="input")
 
     requested_format = body.get("response_format") or settings.tts_format
-    mimo_format, content_type = resolve_speech_format(requested_format, settings.allow_format_downgrade)
-    if str(requested_format).lower() not in ("wav", "pcm") and mimo_format == "wav":
-        log.info("response_format=%r downgraded to wav; MiMo cannot emit it", requested_format)
+    mimo_format, content_type, transcode_to = resolve_speech_format(requested_format)
     voice = body.get("voice") or settings.tts_voice
     voice = settings.voice_aliases.get(voice, voice)
     stream = bool(body.get("stream", False))
@@ -192,6 +194,11 @@ async def speech(request: Request, authorization: Annotated[str | None, Header()
 
     auth = _caller_credential(authorization)
 
+    if stream and transcode_to:
+        # A transcoded container needs the whole stream before it can be framed.
+        log.info("stream=true with %s: buffering, transcoding is not incremental", transcode_to)
+        stream = False
+
     if stream and mimo_format == "pcm16":
         return StreamingResponse(
             mimo.stream_audio_chunks({**payload, "stream": True}, auth),
@@ -213,4 +220,6 @@ async def speech(request: Request, authorization: Annotated[str | None, Header()
     audio = mimo.extract_audio(result)
     if mimo_format == "wav":
         audio = ensure_wav(audio)
+    if transcode_to:
+        audio = await transcode.transcode(audio, transcode_to)
     return Response(content=audio, media_type=content_type)

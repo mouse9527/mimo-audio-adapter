@@ -1,8 +1,14 @@
 """TTS: message placement, formats, base64 decode, streaming."""
 import json
+import shutil
 
 import httpx
+import pytest
 import respx
+
+requires_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None, reason="ffmpeg not installed in this environment"
+)
 
 from .conftest import MIMO_URL, b64, wav_bytes
 
@@ -77,36 +83,49 @@ def test_pcm_format_returns_headerless_octet_stream(client, auth):
     assert json.loads(route.calls[0].request.content)["audio"]["format"] == "pcm16"
 
 
+@requires_ffmpeg
 @respx.mock
-def test_mp3_downgrades_to_wav_for_home_assistant(client, auth):
-    """HA's built-in OpenAI TTS requests mp3 with no way to configure it, and
-    the Assist pipeline never forwards preferred_format, so refusing would
-    leave it unusable. The response is still typed audio/wav, so the wire
-    description stays truthful."""
-    wav = wav_bytes()
-    route = respx.post(MIMO_URL).mock(return_value=_audio_ok(wav))
+def test_mp3_is_transcoded_and_labelled_mp3(client, auth):
+    """HA requests mp3, cannot be configured otherwise, and labels the bytes
+    with the format it asked for rather than reading Content-Type. Returning
+    wav under an mp3 label made HA skip its own ffmpeg pass and hand
+    undecodable audio to the player, so the request is honoured for real."""
+    route = respx.post(MIMO_URL).mock(return_value=_audio_ok(wav_bytes()))
     r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "mp3"}, headers=auth)
     assert r.status_code == 200
-    assert r.headers["content-type"] == "audio/wav"
-    assert r.content == wav
+    assert r.headers["content-type"] == "audio/mpeg"
+    # Real MP3: ID3 tag or a frame sync, never a RIFF header.
+    assert r.content[:3] == b"ID3" or r.content[0] == 0xFF
+    assert r.content[:4] != b"RIFF"
+    # MiMo is still asked for wav; the conversion happens here.
     assert json.loads(route.calls[0].request.content)["audio"]["format"] == "wav"
 
 
-def test_mp3_rejected_when_downgrade_disabled(client, auth, monkeypatch):
-    """The strict contract remains available for callers that read Content-Type."""
-    from app import main
-    monkeypatch.setattr(main.settings, "allow_format_downgrade", False)
-    r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "mp3"}, headers=auth)
-    assert r.status_code == 400
-    err = r.json()["error"]
-    assert err["code"] == "unsupported_response_format"
-    assert "does not transcode" in err["message"]
+@requires_ffmpeg
+@respx.mock
+def test_flac_is_transcoded(client, auth):
+    respx.post(MIMO_URL).mock(return_value=_audio_ok(wav_bytes()))
+    r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "flac"}, headers=auth)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/flac"
+    assert r.content[:4] == b"fLaC"
+
+
+@respx.mock
+def test_wav_is_not_transcoded(client, auth):
+    """The default path stays free of ffmpeg."""
+    wav = wav_bytes()
+    respx.post(MIMO_URL).mock(return_value=_audio_ok(wav))
+    r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "wav"}, headers=auth)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/wav"
+    assert r.content == wav
 
 
 def test_unknown_format_still_rejected(client, auth):
-    """Downgrade covers formats MiMo cannot emit, not typos."""
     r = client.post("/v1/audio/speech", json={"input": "x", "response_format": "flac2"}, headers=auth)
     assert r.status_code == 400
+    assert r.json()["error"]["code"] == "unsupported_response_format"
 
 
 def test_missing_input_rejected(client, auth):

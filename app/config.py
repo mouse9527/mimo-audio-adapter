@@ -24,11 +24,10 @@ class Settings:
     tts_voice: str = field(default_factory=lambda: _env("DEFAULT_TTS_VOICE", "冰糖"))
     tts_format: str = field(default_factory=lambda: _env("DEFAULT_TTS_FORMAT", "wav"))
 
-    # Home Assistant's built-in OpenAI TTS requests mp3 and offers no way to
-    # change it, so allow returning wav instead of refusing. See resolve_speech_format.
-    allow_format_downgrade: bool = field(
-        default_factory=lambda: _env("ALLOW_FORMAT_DOWNGRADE", "true").lower() in ("1", "true", "yes")
-    )
+    # Only used for formats MiMo cannot emit (mp3/opus/aac/flac); wav and pcm
+    # are returned untouched.
+    ffmpeg_binary: str = field(default_factory=lambda: _env("FFMPEG_BINARY", "ffmpeg"))
+    transcode_timeout: float = field(default_factory=lambda: float(_env("TRANSCODE_TIMEOUT", "30")))
 
     port: int = field(default_factory=lambda: int(_env("PORT", "8000")))
     request_timeout: float = field(default_factory=lambda: float(_env("REQUEST_TIMEOUT", "120")))
